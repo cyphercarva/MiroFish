@@ -257,11 +257,42 @@ def generate_ontology():
         })
         
     except Exception as e:
+        logger.error(f"Ontology generation failed: {str(e)}")
+        logger.debug(traceback.format_exc())
+        
+        # Fix #180: LLM provider debug + guidance
+        provider = model = "unknown"
+        try:
+            from ..utils.llm_client import LLMClient
+            test_client = LLMClient()
+            provider = test_client._detect_provider()
+            model = test_client.model
+        except Exception:
+            pass
+        
+        error_detail = str(e)
+        if "groq" in provider.lower() or "groq" in error_detail.lower():
+            guidance = (
+                "Groq JSON mode failed (#180). Fixes:\n"
+                "1. LLM_BASE_URL=https://api.openai.com/v1, LLM_MODEL_NAME=gpt-4o-mini\n"
+                "2. Local Ollama: http://localhost:11434/v1 (ollama pull llama3.1)\n"
+                "3. Check backend/logs & restart: docker compose up --build"
+            )
+        elif provider == "unknown":
+            guidance = "Missing LLM_API_KEY or LLM_BASE_URL in .env. See README."
+        else:
+            guidance = f"LLM error ({provider}/{model}). Check backend/logs."
+        
         return jsonify({
             "success": False,
-            "error": str(e),
+            "error": f"Ontology failed (provider: {provider}): {error_detail}",
+            "debug": {
+                "provider": provider,
+                "model": model,
+                "fix_suggestions": guidance
+            },
             "traceback": traceback.format_exc()
-        })
+        }), 500
 
 
 # ============== 接口2：构建图谱 ==============

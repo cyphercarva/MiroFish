@@ -213,16 +213,27 @@ class OntologyGenerator:
             {"role": "user", "content": user_message}
         ]
         
-        # 调用LLM
+        # 调用LLM (Fix #180: Provider logging + robust fallback)
         try:
             llm_client = self.llm_client or LLMClient()
+            provider = llm_client._detect_provider()
+            logger.info(f"Generating ontology: provider={provider}, model={llm_client.model}, texts={len(document_texts)}")
+            
             result = llm_client.chat_json(
                 messages=messages,
                 temperature=0.3,
                 max_tokens=4096
             )
-        except Exception:
-            logger.exception("Ontology generation LLM call failed")
+            logger.info(f"Ontology generated successfully via {provider}")
+            
+        except (ValueError, json.JSONDecodeError) as llm_err:
+            provider = getattr(llm_client, '_detect_provider', lambda: 'unknown')()
+            logger.warning(f"Ontology LLM failed ({provider}): {str(llm_err)} → using fallback")
+            fallback = self._build_fallback_ontology(document_texts, simulation_requirement)
+            fallback["analysis_summary"] = f"Fallback activated (LLM error: {provider}): {fallback['analysis_summary']}"
+            return fallback
+        except Exception as e:
+            logger.exception("Ontology generation unexpected error")
             return self._build_fallback_ontology(document_texts, simulation_requirement)
         
         # 验证和后处理
