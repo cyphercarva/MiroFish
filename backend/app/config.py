@@ -19,6 +19,20 @@ else:
 
 class Config:
     """Flask配置类"""
+
+    PLACEHOLDER_VALUES = {
+        '',
+        'your_api_key',
+        'your_api_key_here',
+        'your_zep_api_key',
+        'your_zep_api_key_here',
+        'your_base_url_here',
+        'your_model_name_here',
+        'not-needed',
+        'ollama',
+        'none',
+        'null',
+    }
     
     # Flask配置
     SECRET_KEY = os.environ.get('SECRET_KEY', 'mirofish-secret-key')
@@ -31,6 +45,31 @@ class Config:
     LLM_API_KEY = os.environ.get('LLM_API_KEY')
     LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1')
     LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'gpt-4o-mini')
+
+    @classmethod
+    def is_ollama_base_url(cls, base_url: str | None = None) -> bool:
+        return '11434' in (base_url or cls.LLM_BASE_URL or '')
+
+    @classmethod
+    def is_placeholder_value(cls, value: str | None) -> bool:
+        return (value or '').strip().lower() in cls.PLACEHOLDER_VALUES
+
+    @classmethod
+    def has_valid_llm_api_key(
+        cls,
+        api_key: str | None = None,
+        base_url: str | None = None
+    ) -> bool:
+        if cls.is_ollama_base_url(base_url):
+            return True
+
+        value = (api_key or cls.LLM_API_KEY or '').strip()
+        return not cls.is_placeholder_value(value)
+
+    @classmethod
+    def has_valid_zep_api_key(cls, api_key: str | None = None) -> bool:
+        value = (api_key or cls.ZEP_API_KEY or '').strip()
+        return not cls.is_placeholder_value(value)
     
     # Zep配置
     ZEP_API_KEY = os.environ.get('ZEP_API_KEY')
@@ -65,11 +104,8 @@ class Config:
     
     @classmethod
     def validate(cls):
-        """验证必要配置"""
         errors = []
-        if not cls.LLM_API_KEY:
-            errors.append("LLM_API_KEY 未配置")
-        if not cls.ZEP_API_KEY:
-            errors.append("ZEP_API_KEY 未配置")
+        if not cls.has_valid_llm_api_key(cls.LLM_API_KEY, cls.LLM_BASE_URL):
+            errors.append("LLM_API_KEY not configured")
         return errors
 

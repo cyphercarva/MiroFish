@@ -231,14 +231,13 @@ class SimulationConfigGenerator:
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
         self.model_name = model_name or Config.LLM_MODEL_NAME
-        
-        if not self.api_key:
-            raise ValueError("LLM_API_KEY 未配置")
-        
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
-        )
+
+        self.client = None
+        if Config.is_ollama_base_url(self.base_url) or Config.has_valid_llm_api_key(self.api_key, self.base_url):
+            self.client = OpenAI(
+                api_key=(self.api_key or "ollama"),
+                base_url=self.base_url
+            )
     
     def generate_config(
         self,
@@ -434,6 +433,9 @@ class SimulationConfigGenerator:
     def _call_llm_with_retry(self, prompt: str, system_prompt: str) -> Dict[str, Any]:
         """带重试的LLM调用，包含JSON修复逻辑"""
         import re
+
+        if not self.client:
+            raise RuntimeError("LLM client unavailable")
         
         max_attempts = 3
         last_error = None
@@ -475,10 +477,25 @@ class SimulationConfigGenerator:
             except Exception as e:
                 logger.warning(f"LLM调用失败 (attempt {attempt+1}): {str(e)[:80]}")
                 last_error = e
+                if not self._should_retry_llm_error(e):
+                    break
                 import time
                 time.sleep(2 * (attempt + 1))
         
         raise last_error or Exception("LLM调用失败")
+
+    @staticmethod
+    def _should_retry_llm_error(error: Exception) -> bool:
+        message = str(error).lower()
+        non_retryable_markers = [
+            "not_found_error",
+            "model '",
+            "404",
+            "connection refused",
+            "failed to establish a new connection",
+            "max retries exceeded",
+        ]
+        return not any(marker in message for marker in non_retryable_markers)
     
     def _fix_truncated_json(self, content: str) -> str:
         """修复被截断的JSON"""

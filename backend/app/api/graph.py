@@ -12,6 +12,13 @@ from . import graph_bp
 from ..config import Config
 from ..services.ontology_generator import OntologyGenerator
 from ..services.graph_builder import GraphBuilderService
+from ..services.local_graph import (
+    build_local_graph,
+    delete_local_graph,
+    is_local_graph,
+    load_local_graph,
+    save_local_graph,
+)
 from ..services.text_processor import TextProcessor
 from ..utils.file_parser import FileParser
 from ..utils.logger import get_logger
@@ -220,6 +227,8 @@ def generate_ontology():
             simulation_requirement=simulation_requirement,
             additional_context=additional_context if additional_context else None
         )
+        if ontology.get("success") is False:
+            return jsonify(ontology)
         
         # 保存本体到项目
         entity_count = len(ontology.get("entity_types", []))
@@ -252,7 +261,7 @@ def generate_ontology():
             "success": False,
             "error": str(e),
             "traceback": traceback.format_exc()
-        }), 500
+        })
 
 
 # ============== 接口2：构建图谱 ==============
@@ -282,18 +291,7 @@ def build_graph():
     """
     try:
         logger.info("=== 开始构建图谱 ===")
-        
-        # 检查配置
-        errors = []
-        if not Config.ZEP_API_KEY:
-            errors.append(t('api.zepApiKeyMissing'))
-        if errors:
-            logger.error(f"配置错误: {errors}")
-            return jsonify({
-                "success": False,
-                "error": t('api.configError', details="; ".join(errors))
-            }), 500
-        
+
         # 解析请求
         data = request.get_json() or {}
         project_id = data.get('project_id')
@@ -344,6 +342,7 @@ def build_graph():
         # 更新项目配置
         project.chunk_size = chunk_size
         project.chunk_overlap = chunk_overlap
+        local_graph_mode = not Config.has_valid_zep_api_key()
         
         # 获取提取的文本
         text = ProjectManager.get_extracted_text(project_id)
@@ -385,6 +384,50 @@ def build_graph():
                     status=TaskStatus.PROCESSING,
                     message=t('progress.initGraphService')
                 )
+
+                if local_graph_mode:
+                    task_manager.update_task(
+                        task_id,
+                        message="Building local graph fallback",
+                        progress=10
+                    )
+
+                    chunks = TextProcessor.split_text(
+                        text,
+                        chunk_size=chunk_size,
+                        overlap=chunk_overlap
+                    )
+                    graph_data = build_local_graph(
+                        project_id=project_id,
+                        project_name=project.name or graph_name,
+                        text=text,
+                        ontology=ontology
+                    )
+                    save_local_graph(project_id, graph_data)
+
+                    project.graph_id = graph_data["graph_id"]
+                    project.status = ProjectStatus.GRAPH_COMPLETED
+                    ProjectManager.save_project(project)
+
+                    build_logger.info(
+                        f"[{task_id}] local graph ready: graph_id={graph_data['graph_id']}, "
+                        f"nodes={graph_data['node_count']}, edges={graph_data['edge_count']}"
+                    )
+
+                    task_manager.update_task(
+                        task_id,
+                        status=TaskStatus.COMPLETED,
+                        message="Local graph ready",
+                        progress=100,
+                        result={
+                            "project_id": project_id,
+                            "graph_id": graph_data["graph_id"],
+                            "node_count": graph_data["node_count"],
+                            "edge_count": graph_data["edge_count"],
+                            "chunk_count": len(chunks)
+                        }
+                    )
+                    return
                 
                 # 创建图谱构建服务
                 builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
@@ -526,7 +569,7 @@ def build_graph():
             "success": False,
             "error": str(e),
             "traceback": traceback.format_exc()
-        }), 500
+        })
 
 
 # ============== 任务查询接口 ==============
@@ -572,11 +615,11 @@ def get_graph_data(graph_id: str):
     获取图谱数据（节点和边）
     """
     try:
-        if not Config.ZEP_API_KEY:
+        if is_local_graph(graph_id):
             return jsonify({
-                "success": False,
-                "error": t('api.zepApiKeyMissing')
-            }), 500
+                "success": True,
+                "data": load_local_graph(graph_id)
+            })
         
         builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
         graph_data = builder.get_graph_data(graph_id)
@@ -600,11 +643,12 @@ def delete_graph(graph_id: str):
     删除Zep图谱
     """
     try:
-        if not Config.ZEP_API_KEY:
+        if is_local_graph(graph_id):
+            delete_local_graph(graph_id)
             return jsonify({
-                "success": False,
-                "error": t('api.zepApiKeyMissing')
-            }), 500
+                "success": True,
+                "message": t('api.graphDeleted', id=graph_id)
+            })
         
         builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
         builder.delete_graph(graph_id)

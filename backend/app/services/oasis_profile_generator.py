@@ -189,21 +189,20 @@ class OasisProfileGenerator:
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
         self.model_name = model_name or Config.LLM_MODEL_NAME
-        
-        if not self.api_key:
-            raise ValueError("LLM_API_KEY 未配置")
-        
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
-        )
+
+        self.client = None
+        if Config.is_ollama_base_url(self.base_url) or Config.has_valid_llm_api_key(self.api_key, self.base_url):
+            self.client = OpenAI(
+                api_key=(self.api_key or "ollama"),
+                base_url=self.base_url
+            )
         
         # Zep客户端用于检索丰富上下文
         self.zep_api_key = zep_api_key or Config.ZEP_API_KEY
         self.zep_client = None
         self.graph_id = graph_id
         
-        if self.zep_api_key:
+        if Config.has_valid_zep_api_key(self.zep_api_key):
             try:
                 self.zep_client = Zep(api_key=self.zep_api_key)
             except Exception as e:
@@ -509,6 +508,10 @@ class OasisProfileGenerator:
         - 个人实体：生成具体的人物设定
         - 群体/机构实体：生成代表性账号设定
         """
+        if not self.client:
+            return self._generate_profile_rule_based(
+                entity_name, entity_type, entity_summary, entity_attributes
+            )
         
         is_individual = self._is_individual_entity(entity_type)
         
@@ -572,6 +575,8 @@ class OasisProfileGenerator:
             except Exception as e:
                 logger.warning(f"LLM调用失败 (attempt {attempt+1}): {str(e)[:80]}")
                 last_error = e
+                if not self._should_retry_llm_error(e):
+                    break
                 import time
                 time.sleep(1 * (attempt + 1))  # 指数退避
         
@@ -579,6 +584,19 @@ class OasisProfileGenerator:
         return self._generate_profile_rule_based(
             entity_name, entity_type, entity_summary, entity_attributes
         )
+
+    @staticmethod
+    def _should_retry_llm_error(error: Exception) -> bool:
+        message = str(error).lower()
+        non_retryable_markers = [
+            "not_found_error",
+            "model '",
+            "404",
+            "connection refused",
+            "failed to establish a new connection",
+            "max retries exceeded",
+        ]
+        return not any(marker in message for marker in non_retryable_markers)
     
     def _fix_truncated_json(self, content: str) -> str:
         """修复被截断的JSON（输出被max_tokens限制截断）"""

@@ -180,7 +180,7 @@ class OntologyGenerator:
     """
     
     def __init__(self, llm_client: Optional[LLMClient] = None):
-        self.llm_client = llm_client or LLMClient()
+        self.llm_client = llm_client
     
     def generate(
         self,
@@ -214,16 +214,172 @@ class OntologyGenerator:
         ]
         
         # 调用LLM
-        result = self.llm_client.chat_json(
-            messages=messages,
-            temperature=0.3,
-            max_tokens=4096
-        )
+        try:
+            llm_client = self.llm_client or LLMClient()
+            result = llm_client.chat_json(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=4096
+            )
+        except Exception:
+            logger.exception("Ontology generation LLM call failed")
+            return self._build_fallback_ontology(document_texts, simulation_requirement)
         
         # 验证和后处理
         result = self._validate_and_process(result)
         
         return result
+
+    def _build_fallback_ontology(
+        self,
+        document_texts: List[str],
+        simulation_requirement: str
+    ) -> Dict[str, Any]:
+        """Return a safe local ontology when LLM is unavailable."""
+        combined_text = "\n".join(document_texts)
+        topic_candidates = re.findall(r"[A-Za-z][A-Za-z\\-]{3,}", f"{simulation_requirement} {combined_text}")
+        topics = []
+        for token in topic_candidates:
+            normalized = token.lower()
+            if normalized not in topics:
+                topics.append(normalized)
+            if len(topics) >= 4:
+                break
+
+        lead_topic = topics[0].title() if topics else "Core"
+        support_topic = topics[1].title() if len(topics) > 1 else "Public"
+
+        entity_types = [
+            {
+                "name": "PublicFigure",
+                "description": "Visible spokesperson or influential actor in the discussion.",
+                "attributes": [
+                    {"name": "role", "type": "text", "description": "Public role"},
+                    {"name": "focus_topic", "type": "text", "description": "Main topic of interest"},
+                ],
+                "examples": [f"{lead_topic} Spokesperson"],
+            },
+            {
+                "name": "Journalist",
+                "description": "Reporter or editor amplifying updates and reactions.",
+                "attributes": [
+                    {"name": "beat", "type": "text", "description": "Coverage area"},
+                ],
+                "examples": [f"{support_topic} Reporter"],
+            },
+            {
+                "name": "MediaOutlet",
+                "description": "Official media account or publication.",
+                "attributes": [
+                    {"name": "focus_area", "type": "text", "description": "Coverage focus"},
+                ],
+                "examples": [f"{lead_topic} Daily"],
+            },
+            {
+                "name": "GovernmentAgency",
+                "description": "Institutional account issuing announcements or responses.",
+                "attributes": [
+                    {"name": "jurisdiction", "type": "text", "description": "Authority scope"},
+                ],
+                "examples": [f"{support_topic} Response Office"],
+            },
+            {
+                "name": "Company",
+                "description": "Business organization involved in or affected by the event.",
+                "attributes": [
+                    {"name": "industry", "type": "text", "description": "Business domain"},
+                ],
+                "examples": [f"{lead_topic} Labs"],
+            },
+            {
+                "name": "CommunityGroup",
+                "description": "Collective voice representing a social group or community.",
+                "attributes": [
+                    {"name": "community_type", "type": "text", "description": "Kind of community"},
+                ],
+                "examples": [f"{support_topic} Community"],
+            },
+            {
+                "name": "Expert",
+                "description": "Specialist whose opinion influences public conversation.",
+                "attributes": [
+                    {"name": "specialty", "type": "text", "description": "Area of expertise"},
+                ],
+                "examples": [f"{lead_topic} Analyst"],
+            },
+            {
+                "name": "Official",
+                "description": "Named official or representative speaking for an institution.",
+                "attributes": [
+                    {"name": "position", "type": "text", "description": "Official position"},
+                ],
+                "examples": [f"{support_topic} Representative"],
+            },
+            {
+                "name": "Person",
+                "description": "Any individual person not fitting other specific person types.",
+                "attributes": [
+                    {"name": "full_name", "type": "text", "description": "Display name"},
+                ],
+                "examples": ["Local Resident"],
+            },
+            {
+                "name": "Organization",
+                "description": "Any organization not fitting other specific organization types.",
+                "attributes": [
+                    {"name": "org_name", "type": "text", "description": "Organization name"},
+                ],
+                "examples": ["Civic Association"],
+            },
+        ]
+
+        edge_types = [
+            {
+                "name": "REPORTS_ON",
+                "description": "Covers or publishes updates about another actor.",
+                "source_targets": [{"source": "Journalist", "target": "PublicFigure"}],
+                "attributes": [],
+            },
+            {
+                "name": "RESPONDS_TO",
+                "description": "Issues a response to another actor or statement.",
+                "source_targets": [{"source": "GovernmentAgency", "target": "MediaOutlet"}],
+                "attributes": [],
+            },
+            {
+                "name": "SUPPORTS",
+                "description": "Publicly supports another actor or initiative.",
+                "source_targets": [{"source": "CommunityGroup", "target": "Official"}],
+                "attributes": [],
+            },
+            {
+                "name": "OPPOSES",
+                "description": "Publicly opposes another actor or initiative.",
+                "source_targets": [{"source": "Person", "target": "Company"}],
+                "attributes": [],
+            },
+            {
+                "name": "COLLABORATES_WITH",
+                "description": "Coordinates or works with another actor.",
+                "source_targets": [{"source": "Organization", "target": "GovernmentAgency"}],
+                "attributes": [],
+            },
+            {
+                "name": "COMMENTS_ON",
+                "description": "Publishes reactions or commentary about another actor.",
+                "source_targets": [{"source": "PublicFigure", "target": "MediaOutlet"}],
+                "attributes": [],
+            },
+        ]
+
+        return {
+            "entity_types": entity_types,
+            "edge_types": edge_types,
+            "analysis_summary": (
+                "LLM unavailable, so MiroFish generated a local fallback ontology "
+                "to keep the project flow running."
+            ),
+        }
     
     # 传给 LLM 的文本最大长度（5万字）
     MAX_TEXT_LENGTH_FOR_LLM = 50000

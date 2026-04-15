@@ -23,12 +23,13 @@ class LLMClient:
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
         self.model = model or Config.LLM_MODEL_NAME
+        self.is_ollama = Config.is_ollama_base_url(self.base_url)
         
-        if not self.api_key:
+        if not self.is_ollama and not Config.has_valid_llm_api_key(self.api_key, self.base_url):
             raise ValueError("LLM_API_KEY 未配置")
         
         self.client = OpenAI(
-            api_key=self.api_key,
+            api_key=(self.api_key or 'ollama'),
             base_url=self.base_url
         )
     

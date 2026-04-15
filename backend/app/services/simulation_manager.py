@@ -14,6 +14,7 @@ from enum import Enum
 
 from ..config import Config
 from ..utils.logger import get_logger
+from .local_graph import get_local_filtered_entities, is_local_graph
 from .zep_entity_reader import ZepEntityReader, FilteredEntities
 from .oasis_profile_generator import OasisProfileGenerator, OasisAgentProfile
 from .simulation_config_generator import SimulationConfigGenerator, SimulationParameters
@@ -265,24 +266,36 @@ class SimulationManager:
         
         try:
             state.status = SimulationStatus.PREPARING
+            state.error = None
             self._save_simulation_state(state)
             
             sim_dir = self._get_simulation_dir(simulation_id)
+            use_local_graph = is_local_graph(state.graph_id) or not Config.has_valid_zep_api_key()
             
             # ========== 阶段1: 读取并过滤实体 ==========
             if progress_callback:
                 progress_callback("reading", 0, t('progress.connectingZepGraph'))
-            
-            reader = ZepEntityReader()
-            
-            if progress_callback:
-                progress_callback("reading", 30, t('progress.readingNodeData'))
-            
-            filtered = reader.filter_defined_entities(
-                graph_id=state.graph_id,
-                defined_entity_types=defined_entity_types,
-                enrich_with_edges=True
-            )
+
+            if use_local_graph:
+                if progress_callback:
+                    progress_callback("reading", 30, "Loading local graph entities")
+
+                filtered = get_local_filtered_entities(
+                    graph_id=state.graph_id,
+                    defined_entity_types=defined_entity_types,
+                    enrich_with_edges=True
+                )
+            else:
+                reader = ZepEntityReader()
+
+                if progress_callback:
+                    progress_callback("reading", 30, t('progress.readingNodeData'))
+
+                filtered = reader.filter_defined_entities(
+                    graph_id=state.graph_id,
+                    defined_entity_types=defined_entity_types,
+                    enrich_with_edges=True
+                )
             
             state.entities_count = filtered.filtered_count
             state.entity_types = list(filtered.entity_types)
